@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync/atomic"
 
 	thrift "github.com/apache/thrift/lib/go/thrift"
 )
@@ -18,7 +17,6 @@ import (
 // remain owned by the normal LINE session.
 type SquareClient struct {
 	client *Client
-	seq    atomic.Int32
 }
 
 // SquareReadOperation identifies one explicitly registered Square read.
@@ -39,8 +37,7 @@ type squareOperationSpec struct {
 // transport deny all authenticated network calls by default.
 var verifiedSquareReadOperations = map[SquareReadOperation]squareOperationSpec{}
 
-// SquareField represents a field in a compact-Thrift struct. Initial Square
-// read operations require scalar, binary, and nested struct values.
+// SquareField represents a field in a compact-Thrift struct.
 type SquareField struct {
 	ID    int16
 	Value any
@@ -51,9 +48,34 @@ type SquareStruct struct {
 	Fields []SquareField
 }
 
-// SquareReadRequest is the minimum typed request envelope for an explicit
-// Square read call. Callers supply the already-audited method and arguments;
-// this package does not guess endpoints or operation fields.
+// SquareList and SquareSet preserve collection element types from Thrift.
+type SquareList struct {
+	ElementType thrift.TType
+	Values      []any
+}
+
+type SquareSet struct {
+	ElementType thrift.TType
+	Values      []any
+}
+
+type SquareMapEntry struct {
+	Key   any
+	Value any
+}
+
+// SquareMap preserves Thrift map types and entries without inferring Go map
+// key types from incomplete protocol information.
+type SquareMap struct {
+	KeyType   thrift.TType
+	ValueType thrift.TType
+	Entries   []SquareMapEntry
+}
+
+const maxSquareCollectionEntries = 1 << 20
+
+// SquareReadRequest is the wire envelope used by the Compact Protocol encoder.
+// Network calls construct it only from a registered Square operation.
 type SquareReadRequest struct {
 	Method     string
 	SequenceID int32
@@ -78,15 +100,6 @@ func NewSquareClient(client *Client) *SquareClient {
 // It exists as an optional bridge; no independent credential source is used.
 func (c *Client) SquareClient() *SquareClient {
 	return NewSquareClient(c)
-}
-
-// NewSquareRequest creates a read request with a deterministic sequence when
-// sequenceID is zero. A caller may supply a persisted sequence explicitly.
-func (c *SquareClient) NewSquareRequest(method string, sequenceID int32, arguments []SquareField) SquareReadRequest {
-	if sequenceID == 0 {
-		sequenceID = c.seq.Add(1)
-	}
-	return SquareReadRequest{Method: method, SequenceID: sequenceID, Arguments: arguments}
 }
 
 // EncodeSquareRequest encodes a Square request call using Compact Protocol.
@@ -117,10 +130,23 @@ func EncodeSquareRequest(request SquareReadRequest) ([]byte, error) {
 	if err := protocol.WriteMessageEnd(ctx); err != nil {
 		return nil, fmt.Errorf("finish Square request: %w", err)
 	}
-	return append([]byte(nil), buffer.Bytes()...), nil
+	encoded := append([]byte(nil), buffer.Bytes()...)
+	if len(request.Arguments) > 0 {
+		// line-rs mirrors linejs and emits a second trailing STOP after
+		// non-empty argument structs.
+		encoded = append(encoded, 0)
+	}
+	return encoded, nil
 }
 
 func writeSquareField(ctx context.Context, protocol thrift.TProtocol, field SquareField) error {
+	return writeSquareFieldDepth(ctx, protocol, field, 0)
+}
+
+func writeSquareFieldDepth(ctx context.Context, protocol thrift.TProtocol, field SquareField, depth int) error {
+	if depth > thrift.DEFAULT_RECURSION_DEPTH {
+		return errors.New("square Thrift nesting exceeds limit")
+	}
 	typeID, err := squareFieldType(field.Value)
 	if err != nil {
 		return fmt.Errorf("square field %d: %w", field.ID, err)
@@ -148,9 +174,13 @@ func writeSquareField(ctx context.Context, protocol thrift.TProtocol, field Squa
 	case []byte:
 		err = protocol.WriteBinary(ctx, value)
 	case SquareStruct:
-		err = writeSquareStruct(ctx, protocol, value)
+		err = writeSquareStructDepth(ctx, protocol, value, depth+1)
 	case *SquareStruct:
-		err = writeSquareStruct(ctx, protocol, *value)
+		if value == nil {
+			err = errors.New("nil Square struct")
+		} else {
+			err = writeSquareStructDepth(ctx, protocol, *value, depth+1)
+		}
 	default:
 		err = fmt.Errorf("unsupported Thrift value type %T", value)
 	}
@@ -160,12 +190,15 @@ func writeSquareField(ctx context.Context, protocol thrift.TProtocol, field Squa
 	return protocol.WriteFieldEnd(ctx)
 }
 
-func writeSquareStruct(ctx context.Context, protocol thrift.TProtocol, value SquareStruct) error {
+func writeSquareStructDepth(ctx context.Context, protocol thrift.TProtocol, value SquareStruct, depth int) error {
+	if depth > thrift.DEFAULT_RECURSION_DEPTH {
+		return errors.New("square Thrift nesting exceeds limit")
+	}
 	if err := protocol.WriteStructBegin(ctx, ""); err != nil {
 		return err
 	}
 	for _, field := range value.Fields {
-		if err := writeSquareField(ctx, protocol, field); err != nil {
+		if err := writeSquareFieldDepth(ctx, protocol, field, depth); err != nil {
 			return err
 		}
 	}
@@ -236,7 +269,7 @@ func DecodeSquareResponse(ctx context.Context, data []byte) (*SquareReadResponse
 			if typeID == thrift.STOP {
 				break
 			}
-			field, err := readSquareField(ctx, protocol, fieldID, typeID)
+			field, err := readSquareFieldDepth(ctx, protocol, fieldID, typeID, 0)
 			if err != nil {
 				return nil, fmt.Errorf("decode Square reply field %d: %w", fieldID, err)
 			}
@@ -257,41 +290,116 @@ func DecodeSquareResponse(ctx context.Context, data []byte) (*SquareReadResponse
 	}
 }
 
-func readSquareField(ctx context.Context, protocol thrift.TProtocol, fieldID int16, typeID thrift.TType) (SquareField, error) {
+func readSquareFieldDepth(ctx context.Context, protocol thrift.TProtocol, fieldID int16, typeID thrift.TType, depth int) (SquareField, error) {
+	value, err := readSquareValue(ctx, protocol, typeID, depth)
+	return SquareField{ID: fieldID, Value: value}, err
+}
+
+func readSquareValue(ctx context.Context, protocol thrift.TProtocol, typeID thrift.TType, depth int) (any, error) {
+	if depth > thrift.DEFAULT_RECURSION_DEPTH {
+		return nil, errors.New("square Thrift nesting exceeds limit")
+	}
 	switch typeID {
 	case thrift.BOOL:
-		value, err := protocol.ReadBool(ctx)
-		return SquareField{ID: fieldID, Value: value}, err
+		return protocol.ReadBool(ctx)
 	case thrift.BYTE:
-		value, err := protocol.ReadByte(ctx)
-		return SquareField{ID: fieldID, Value: value}, err
+		return protocol.ReadByte(ctx)
 	case thrift.I16:
-		value, err := protocol.ReadI16(ctx)
-		return SquareField{ID: fieldID, Value: value}, err
+		return protocol.ReadI16(ctx)
 	case thrift.I32:
-		value, err := protocol.ReadI32(ctx)
-		return SquareField{ID: fieldID, Value: value}, err
+		return protocol.ReadI32(ctx)
 	case thrift.I64:
-		value, err := protocol.ReadI64(ctx)
-		return SquareField{ID: fieldID, Value: value}, err
+		return protocol.ReadI64(ctx)
 	case thrift.DOUBLE:
-		value, err := protocol.ReadDouble(ctx)
-		return SquareField{ID: fieldID, Value: value}, err
+		return protocol.ReadDouble(ctx)
 	case thrift.STRING:
-		value, err := protocol.ReadString(ctx)
-		return SquareField{ID: fieldID, Value: value}, err
+		return protocol.ReadString(ctx)
 	case thrift.STRUCT:
-		value, err := readSquareStruct(ctx, protocol)
-		return SquareField{ID: fieldID, Value: value}, err
+		return readSquareStructDepth(ctx, protocol, depth+1)
+	case thrift.LIST:
+		elementType, size, err := protocol.ReadListBegin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if size > maxSquareCollectionEntries {
+			return nil, errors.New("square Thrift collection exceeds size limit")
+		}
+		if depth >= thrift.DEFAULT_RECURSION_DEPTH {
+			return nil, errors.New("square Thrift nesting exceeds limit")
+		}
+		value := SquareList{ElementType: elementType, Values: make([]any, size)}
+		for i := range value.Values {
+			value.Values[i], err = readSquareValue(ctx, protocol, elementType, depth+1)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if err := protocol.ReadListEnd(ctx); err != nil {
+			return nil, err
+		}
+		return value, nil
+	case thrift.SET:
+		elementType, size, err := protocol.ReadSetBegin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if size > maxSquareCollectionEntries {
+			return nil, errors.New("square Thrift collection exceeds size limit")
+		}
+		if depth >= thrift.DEFAULT_RECURSION_DEPTH {
+			return nil, errors.New("square Thrift nesting exceeds limit")
+		}
+		value := SquareSet{ElementType: elementType, Values: make([]any, size)}
+		for i := range value.Values {
+			value.Values[i], err = readSquareValue(ctx, protocol, elementType, depth+1)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if err := protocol.ReadSetEnd(ctx); err != nil {
+			return nil, err
+		}
+		return value, nil
+	case thrift.MAP:
+		keyType, valueType, size, err := protocol.ReadMapBegin(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if size > maxSquareCollectionEntries {
+			return nil, errors.New("square Thrift collection exceeds size limit")
+		}
+		if depth >= thrift.DEFAULT_RECURSION_DEPTH {
+			return nil, errors.New("square Thrift nesting exceeds limit")
+		}
+		value := SquareMap{KeyType: keyType, ValueType: valueType, Entries: make([]SquareMapEntry, size)}
+		for i := range value.Entries {
+			value.Entries[i].Key, err = readSquareValue(ctx, protocol, keyType, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			value.Entries[i].Value, err = readSquareValue(ctx, protocol, valueType, depth+1)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if err := protocol.ReadMapEnd(ctx); err != nil {
+			return nil, err
+		}
+		return value, nil
+	case thrift.UUID:
+		return protocol.ReadUUID(ctx)
 	default:
 		if err := thrift.SkipDefaultDepth(ctx, protocol, typeID); err != nil {
-			return SquareField{}, err
+			return nil, err
 		}
-		return SquareField{ID: fieldID}, nil
+		return nil, nil
 	}
 }
 
-func readSquareStruct(ctx context.Context, protocol thrift.TProtocol) (SquareStruct, error) {
+func readSquareStructDepth(ctx context.Context, protocol thrift.TProtocol, depth int) (SquareStruct, error) {
+	if depth > thrift.DEFAULT_RECURSION_DEPTH {
+		return SquareStruct{}, errors.New("square Thrift nesting exceeds limit")
+	}
 	value := SquareStruct{}
 	if _, err := protocol.ReadStructBegin(ctx); err != nil {
 		return value, err
@@ -304,7 +412,7 @@ func readSquareStruct(ctx context.Context, protocol thrift.TProtocol) (SquareStr
 		if typeID == thrift.STOP {
 			break
 		}
-		field, err := readSquareField(ctx, protocol, fieldID, typeID)
+		field, err := readSquareFieldDepth(ctx, protocol, fieldID, typeID, depth)
 		if err != nil {
 			return value, err
 		}
@@ -369,7 +477,7 @@ func (c *SquareClient) callReadWithSpec(ctx context.Context, spec squareOperatio
 	if err != nil {
 		return nil, fmt.Errorf("invalid Square allowlist entry: %w", err)
 	}
-	request := c.NewSquareRequest(spec.method, 0, arguments)
+	request := SquareReadRequest{Method: spec.method, Arguments: arguments}
 	body, err := EncodeSquareRequest(request)
 	if err != nil {
 		return nil, err

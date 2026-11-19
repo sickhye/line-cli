@@ -3,6 +3,7 @@ package line
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
@@ -103,6 +104,117 @@ func encodeTestSquareApplicationException(t *testing.T, name string, sequence in
 	return append([]byte(nil), buffer.Bytes()...)
 }
 
+func encodeTestSquareContainerReply(t *testing.T) []byte {
+	t.Helper()
+	buffer := thrift.NewTMemoryBuffer()
+	protocol := thrift.NewTCompactProtocolConf(buffer, nil)
+	ctx := context.Background()
+	if err := protocol.WriteMessageBegin(ctx, "getJoinedSquares", thrift.REPLY, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteStructBegin(ctx, "result"); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteFieldBegin(ctx, "", thrift.STRUCT, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteStructBegin(ctx, "success"); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteFieldBegin(ctx, "", thrift.LIST, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteListBegin(ctx, thrift.STRING, 2); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"square-a", "square-b"} {
+		if err := protocol.WriteString(ctx, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := protocol.WriteListEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteFieldEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteFieldBegin(ctx, "", thrift.MAP, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteMapBegin(ctx, thrift.STRING, thrift.I32, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteString(ctx, "square-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteI32(ctx, 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteMapEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteFieldEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteFieldBegin(ctx, "", thrift.SET, 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteSetBegin(ctx, thrift.I16, 2); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []int16{2, 4} {
+		if err := protocol.WriteI16(ctx, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := protocol.WriteSetEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteFieldEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteFieldStop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteStructEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteFieldEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteFieldStop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteStructEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteMessageEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return append([]byte(nil), buffer.Bytes()...)
+}
+
+func writeNestedSquareStructFixture(ctx context.Context, protocol thrift.TProtocol, depth int) error {
+	if err := protocol.WriteStructBegin(ctx, ""); err != nil {
+		return err
+	}
+	if depth > 0 {
+		if err := protocol.WriteFieldBegin(ctx, "", thrift.STRUCT, 1); err != nil {
+			return err
+		}
+		if err := writeNestedSquareStructFixture(ctx, protocol, depth-1); err != nil {
+			return err
+		}
+		if err := protocol.WriteFieldEnd(ctx); err != nil {
+			return err
+		}
+	}
+	if err := protocol.WriteFieldStop(ctx); err != nil {
+		return err
+	}
+	return protocol.WriteStructEnd(ctx)
+}
+
 func fixtureSquareSpec() squareOperationSpec {
 	return squareOperationSpec{
 		host:   "square.invalid",
@@ -115,6 +227,16 @@ func fixtureSquareSpec() squareOperationSpec {
 			return nil
 		},
 	}
+}
+
+func nestedSquareStruct(depth int) SquareStruct {
+	if depth <= 0 {
+		return SquareStruct{}
+	}
+	return SquareStruct{Fields: []SquareField{{
+		ID:    1,
+		Value: nestedSquareStruct(depth - 1),
+	}}}
 }
 
 func TestEncodeSquareRequest(t *testing.T) {
@@ -168,10 +290,23 @@ func TestEncodeSquareRequest(t *testing.T) {
 	}
 }
 
+func TestEncodeSquareNestingLimit(t *testing.T) {
+	request := SquareReadRequest{
+		Method: "nestedFixture",
+		Arguments: []SquareField{{
+			ID:    1,
+			Value: nestedSquareStruct(thrift.DEFAULT_RECURSION_DEPTH + 2),
+		}},
+	}
+	if _, err := EncodeSquareRequest(request); err == nil {
+		t.Fatal("over-depth Square request accepted")
+	}
+}
+
 func TestCompactProtocolGoldenBytes(t *testing.T) {
-	// Compact Protocol v1 reference bytes, written independently of the Go
-	// runtime so a Rust line-rs fixture can be compared byte-for-byte later.
-	wantRequest := []byte{0x82, 0x21, 0x01, 0x04, 'p', 'i', 'n', 'g', 0x18, 0x01, 'x', 0x00}
+	// Compact Protocol v1 request bytes including line-rs/linejs' trailing
+	// STOP after non-empty args. These bytes are independent of the Go runtime.
+	wantRequest := []byte{0x82, 0x21, 0x01, 0x04, 'p', 'i', 'n', 'g', 0x18, 0x01, 'x', 0x00, 0x00}
 	gotRequest, err := EncodeSquareRequest(SquareReadRequest{
 		Method:     "ping",
 		SequenceID: 1,
@@ -200,6 +335,38 @@ func TestCompactProtocolGoldenBytes(t *testing.T) {
 	}
 }
 
+func TestRustLineRSSquareSendMessageGoldenBytes(t *testing.T) {
+	request := SquareReadRequest{
+		Method: "sendMessage",
+		Arguments: []SquareField{{
+			ID: 1,
+			Value: SquareStruct{Fields: []SquareField{
+				{ID: 1, Value: int32(1)},
+				{ID: 2, Value: "m1"},
+				{ID: 3, Value: SquareStruct{Fields: []SquareField{
+					{ID: 1, Value: SquareStruct{Fields: []SquareField{
+						{ID: 2, Value: "m1"},
+						{ID: 10, Value: "x"},
+						{ID: 15, Value: int32(0)},
+					}}},
+					{ID: 4, Value: int64(0)},
+				}}},
+			}},
+		}},
+	}
+	got, err := EncodeSquareRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := hex.DecodeString("8221000b73656e644d6573736167651c150218026d311c1c28026d31880178550000360000000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("Square request bytes = % x, want line-rs fixture % x", got, want)
+	}
+}
+
 func TestDecodeSquareSuccess(t *testing.T) {
 	body := encodeTestSquareReply(t, "getSquareReadFixture", 7, false)
 	response, err := DecodeSquareResponse(context.Background(), body)
@@ -218,6 +385,92 @@ func TestDecodeSquareSuccess(t *testing.T) {
 	}
 	if len(structValue.Fields) != 1 || structValue.Fields[0].Value != "ok" {
 		t.Fatalf("nested fields = %#v", structValue.Fields)
+	}
+}
+
+func TestDecodeSquareCollections(t *testing.T) {
+	response, err := DecodeSquareResponse(context.Background(), encodeTestSquareContainerReply(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Fields) != 1 {
+		t.Fatalf("result fields = %#v", response.Fields)
+	}
+	success, ok := response.Fields[0].Value.(SquareStruct)
+	if !ok || len(success.Fields) != 3 {
+		t.Fatalf("success = %#v", response.Fields[0].Value)
+	}
+	list, ok := success.Fields[0].Value.(SquareList)
+	if !ok || list.ElementType != thrift.STRING || len(list.Values) != 2 ||
+		list.Values[0] != "square-a" || list.Values[1] != "square-b" {
+		t.Fatalf("list = %#v", success.Fields[0].Value)
+	}
+	squareMap, ok := success.Fields[1].Value.(SquareMap)
+	if !ok || squareMap.KeyType != thrift.STRING || squareMap.ValueType != thrift.I32 ||
+		len(squareMap.Entries) != 1 || squareMap.Entries[0].Key != "square-a" || squareMap.Entries[0].Value != int32(7) {
+		t.Fatalf("map = %#v", success.Fields[1].Value)
+	}
+	set, ok := success.Fields[2].Value.(SquareSet)
+	if !ok || set.ElementType != thrift.I16 || len(set.Values) != 2 ||
+		set.Values[0] != int16(2) || set.Values[1] != int16(4) {
+		t.Fatalf("set = %#v", success.Fields[2].Value)
+	}
+}
+
+func TestDecodeSquareNestingLimit(t *testing.T) {
+	ctx := context.Background()
+	buffer := thrift.NewTMemoryBuffer()
+	protocol := thrift.NewTCompactProtocolConf(buffer, nil)
+	if err := protocol.WriteMessageBegin(ctx, "nestedFixture", thrift.REPLY, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteStructBegin(ctx, "result"); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteFieldBegin(ctx, "", thrift.STRUCT, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeNestedSquareStructFixture(ctx, protocol, thrift.DEFAULT_RECURSION_DEPTH+2); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteFieldEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteFieldStop(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteStructEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteMessageEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeSquareResponse(ctx, buffer.Bytes()); err == nil {
+		t.Fatal("over-depth Square response accepted")
+	}
+}
+
+func TestDecodeSquareCollectionLimit(t *testing.T) {
+	ctx := context.Background()
+	buffer := thrift.NewTMemoryBuffer()
+	protocol := thrift.NewTCompactProtocolConf(buffer, nil)
+	if err := protocol.WriteMessageBegin(ctx, "oversizedList", thrift.REPLY, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteStructBegin(ctx, "result"); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteFieldBegin(ctx, "", thrift.LIST, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteListBegin(ctx, thrift.STRING, maxSquareCollectionEntries+1); err != nil {
+		t.Fatal(err)
+	}
+	if err := protocol.WriteMessageEnd(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeSquareResponse(ctx, buffer.Bytes()); err == nil {
+		t.Fatal("oversized Square collection accepted")
 	}
 }
 
@@ -248,9 +501,6 @@ func TestDecodeSquareUnknownResultStructIsOpaque(t *testing.T) {
 	nested, ok := response.Fields[0].Value.(SquareStruct)
 	if !ok || len(nested.Fields) != 2 || nested.Fields[0].ID != 1 || nested.Fields[1].ID != 2 {
 		t.Fatalf("unknown result struct was not preserved opaquely: %#v", response.Fields[0].Value)
-	}
-	if _, err := EncodeSquareRequest(SquareReadRequest{Method: "arbitrary"}); err != nil {
-		t.Fatal(err)
 	}
 }
 

@@ -47,7 +47,7 @@ jobs:
       - name: Run Square transport security gates
         shell: bash
         run: |
-          go test -count=1 -v ./pkg/line -run '^(TestCompactProtocolGoldenBytes|TestEncodeSquareRequest|TestDecodeSquareSuccess|TestDecodeSquareApplicationException|TestDecodeSquareUnknownResultStructIsOpaque|TestDecodeSquareMalformedTruncated|TestSquareHTTPStatusAndOversizedResponse|TestSquareUnknownOperationsCannotSendCredentials|TestSquareAllowlistBuildsExactHTTPSEndpoint|TestSquareRedirectRejectedWithoutCredentialForwarding|TestSquareContextCancellationAndTimeout|TestTalkRPCRegressionPathUnchanged)$'
+          go test -count=1 -v ./pkg/line -run '^(TestCompactProtocolGoldenBytes|TestRustLineRSSquareSendMessageGoldenBytes|TestEncodeSquareRequest|TestEncodeSquareNestingLimit|TestDecodeSquareSuccess|TestDecodeSquareCollections|TestDecodeSquareNestingLimit|TestDecodeSquareCollectionLimit|TestDecodeSquareApplicationException|TestDecodeSquareUnknownResultStructIsOpaque|TestDecodeSquareMalformedTruncated|TestSquareHTTPStatusAndOversizedResponse|TestSquareUnknownOperationsCannotSendCredentials|TestSquareAllowlistBuildsExactHTTPSEndpoint|TestSquareRedirectRejectedWithoutCredentialForwarding|TestSquareContextCancellationAndTimeout|TestTalkRPCRegressionPathUnchanged)$'
           go test -count=1 -v ./internal/session -run '^TestDoSquareReadContextRejectsUnregisteredOperation$'
       - name: Build CLI
         run: ./build.sh
