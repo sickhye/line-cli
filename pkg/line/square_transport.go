@@ -20,10 +20,21 @@ type SquareClient struct {
 }
 
 // SquareReadOperation identifies one explicitly registered Square read.
-// Operations without a verified endpoint and schema are rejected.
+// Operations outside the fixed read allowlist are rejected.
 type SquareReadOperation string
 
-var ErrSquareOperationNotAllowed = errors.New("square read operation is not allowlisted")
+const (
+	SquareReadGetJoinedSquares     SquareReadOperation = "getJoinedSquares"
+	SquareReadGetJoinedSquareChats SquareReadOperation = "getJoinedSquareChats"
+	SquareReadFetchChatEvents      SquareReadOperation = "fetchSquareChatEvents"
+	squareAPIHost                                      = "legy.line-apps.com"
+	squareAPIPath                                      = "/SQ1"
+)
+
+var (
+	ErrSquareOperationNotAllowed = errors.New("square read operation is not allowlisted")
+	ErrSquareServiceException    = errors.New("LINE Square service exception")
+)
 
 type squareOperationSpec struct {
 	host              string
@@ -32,10 +43,28 @@ type squareOperationSpec struct {
 	validateArguments func([]SquareField) error
 }
 
-// Keep this registry empty until a host, exact path, method, and argument
-// schema are confirmed from protocol evidence. This makes the initial
-// transport deny all authenticated network calls by default.
-var verifiedSquareReadOperations = map[SquareReadOperation]squareOperationSpec{}
+// The registered methods are read-only calls whose schemas appear in the
+// public softnetics/line-rs IDL. The live Chrome Extension contract is unverified.
+var allowlistedSquareReadOperations = map[SquareReadOperation]squareOperationSpec{
+	SquareReadGetJoinedSquares: {
+		host:              squareAPIHost,
+		path:              squareAPIPath,
+		method:            string(SquareReadGetJoinedSquares),
+		validateArguments: validateSquarePageArguments,
+	},
+	SquareReadGetJoinedSquareChats: {
+		host:              squareAPIHost,
+		path:              squareAPIPath,
+		method:            string(SquareReadGetJoinedSquareChats),
+		validateArguments: validateSquarePageArguments,
+	},
+	SquareReadFetchChatEvents: {
+		host:              squareAPIHost,
+		path:              squareAPIPath,
+		method:            string(SquareReadFetchChatEvents),
+		validateArguments: validateSquareChatEventsArguments,
+	},
+}
 
 // SquareField represents a field in a compact-Thrift struct.
 type SquareField struct {
@@ -453,7 +482,7 @@ func (c *SquareClient) CallRead(ctx context.Context, operation SquareReadOperati
 	if c == nil || c.client == nil {
 		return nil, errors.New("square transport has no LINE client")
 	}
-	spec, ok := verifiedSquareReadOperations[operation]
+	spec, ok := allowlistedSquareReadOperations[operation]
 	if !ok {
 		return nil, ErrSquareOperationNotAllowed
 	}
@@ -486,14 +515,15 @@ func (c *SquareClient) callReadWithSpec(ctx context.Context, spec squareOperatio
 	if err != nil {
 		return nil, fmt.Errorf("create Square request: %w", err)
 	}
+	httpRequest.Header.Set("Accept", "application/x-thrift")
 	httpRequest.Header.Set("Content-Type", "application/x-thrift")
 	httpRequest.Header.Set("User-Agent", UserAgent)
-	httpRequest.Header.Set("x-line-chrome-version", ExtensionVersion)
 	httpRequest.Header.Set("x-line-application", lineApplicationHeader)
 	httpRequest.Header.Set("x-lal", "en_US")
+	httpRequest.Header.Set("x-lpv", "1")
+	httpRequest.Header.Set("x-lhm", http.MethodPost)
 	if c.client.AccessToken != "" {
 		httpRequest.Header.Set("x-line-access", c.client.AccessToken)
-		httpRequest.Header.Set("Cookie", fmt.Sprintf("lct=%s", c.client.AccessToken))
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

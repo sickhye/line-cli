@@ -16,6 +16,9 @@ diagnostics go to stderr. Use full chat IDs and keep message IDs as strings.
 | `line messages CHAT_ID --details --json` | Schema-1 envelope with `chat`, safe decoded content, and server order. Add `--page` for a newest-first detailed page. |
 | `line chats --json` | Legacy chat array. |
 | `line chats --details --json` | Schema-1 `chats` envelope with explicit unknown values. |
+| `line squares --json` | `{"squares":[...],"next_cursor":"..."}` joined-OpenChat page. |
+| `line square-chats --json` | `{"chats":[...],"next_cursor":"..."}` joined-room page. |
+| `line square-messages CHAT_MID --json` | `{"chat_mid":"...","messages":[...],"next_cursor":"..."}` message-event page. |
 | `line watch --json` | Existing NDJSON stream; no detailed-content envelope. Also the output whenever stdout is not a terminal. Without `--json`, a terminal gets readable lines instead. |
 | `line invites --json` | Schema-1 object with `invitations`: `chat_id`, nullable `name`, `name_status` (`resolved` or `unavailable`). |
 | `line read`, `line invites accept\|reject` `--json` | One receipt object: `action`, `chat_id`, `request_sequence`, plus `message_id` for `read`. |
@@ -35,6 +38,36 @@ HTTPS/TLS still encrypts the transfer. LINE can read non-E2EE content.
 Pagination and cursors follow the [history guide](CLI.md#history-pagination-json).
 Other command fields and exit codes are listed in the
 [CLI reference](CLI.md#json-output-and-exit-codes).
+
+## OpenChat read pages
+
+The Square commands return one page per invocation. Use the `next_cursor`
+value as the next call's `--cursor`; the CLI does not automatically paginate.
+Fields are protocol-derived from `softnetics/line-rs` and have not been
+validated against a live LINE response or the Chrome Extension contract.
+
+```json
+{
+  "squares": [
+    {
+      "mid": "square-mid",
+      "name": "Community",
+      "description": "Description",
+      "profile_image_hash": "..."
+    }
+  ],
+  "next_cursor": "..."
+}
+```
+
+`square-chats` returns `chats` rows with `mid`, `square_mid`, `name`, and
+optional `profile_image_hash`. `square-messages` returns `chat_mid`, `messages`,
+and optional `next_cursor`. Message rows may contain `id`, `sender_mid`,
+`sender_display_name`, `created_at` (epoch milliseconds), `text`,
+`content_type`, and `direction` (`received` or `sent`). Omitted optional fields
+mean they were absent in the decoded event, not that the server guarantees an
+empty or zero value. Non-text events may have no `text`. These commands do not
+decrypt Square message content.
 
 ## History diagnostics
 

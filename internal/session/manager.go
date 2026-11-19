@@ -416,19 +416,64 @@ func (m *Manager) DoContext(ctx context.Context, call func(API) error) error {
 // in login invalidation and refresh handling until a verified mapping exists.
 func (m *Manager) DoSquareReadContext(ctx context.Context, operation line.SquareReadOperation, arguments []line.SquareField) (*line.SquareReadResponse, error) {
 	var response *line.SquareReadResponse
-	err := m.do(ctx, func(api API) error {
-		provider, ok := api.(interface{ SquareClient() *line.SquareClient })
-		if !ok {
-			return errors.New("session API does not provide the Square transport")
-		}
+	err := m.squareRead(ctx, func(client *line.SquareClient) error {
 		var err error
-		response, err = provider.SquareClient().CallRead(ctx, operation, arguments)
+		response, err = client.CallRead(ctx, operation, arguments)
 		return err
-	}, true)
+	})
 	if err != nil {
 		return nil, err
 	}
 	return response, nil
+}
+
+func (m *Manager) GetJoinedSquaresContext(ctx context.Context, limit int, cursor string) (*line.JoinedSquaresPage, error) {
+	var response *line.JoinedSquaresPage
+	err := m.squareRead(ctx, func(client *line.SquareClient) error {
+		var err error
+		response, err = client.GetJoinedSquares(ctx, limit, cursor)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (m *Manager) GetJoinedSquareChatsContext(ctx context.Context, limit int, cursor string) (*line.JoinedSquareChatsPage, error) {
+	var response *line.JoinedSquareChatsPage
+	err := m.squareRead(ctx, func(client *line.SquareClient) error {
+		var err error
+		response, err = client.GetJoinedSquareChats(ctx, limit, cursor)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (m *Manager) FetchSquareChatMessagesContext(ctx context.Context, chatMID string, limit int, cursor string) (*line.SquareMessagesPage, error) {
+	var response *line.SquareMessagesPage
+	err := m.squareRead(ctx, func(client *line.SquareClient) error {
+		var err error
+		response, err = client.FetchSquareChatMessages(ctx, chatMID, limit, cursor)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+func (m *Manager) squareRead(ctx context.Context, call func(*line.SquareClient) error) error {
+	return m.do(ctx, func(api API) error {
+		provider, ok := api.(interface{ SquareClient() *line.SquareClient })
+		if !ok {
+			return errors.New("session API does not provide the Square transport")
+		}
+		return call(provider.SquareClient())
+	}, true)
 }
 
 // Mutate refreshes credentials but never replays the operation, even on auth errors.

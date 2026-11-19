@@ -52,7 +52,7 @@ func TestCompletionSpecMatchesHelp(t *testing.T) {
 	if err := a.Run([]string{"help"}); err != nil {
 		t.Fatal(err)
 	}
-	listed := regexp.MustCompile(`(?m)^  ([a-z]+)\s{2,}`).FindAllStringSubmatch(out.String(), -1)
+	listed := regexp.MustCompile(`(?m)^  ([a-z][a-z-]*)\s{2,}`).FindAllStringSubmatch(out.String(), -1)
 	var documented []string
 	for _, m := range listed {
 		documented = append(documented, m[1])
@@ -170,7 +170,7 @@ func TestBashCompletionBehavior(t *testing.T) {
 		words []string
 		want  string
 	}{
-		{[]string{"line", ""}, "login whoami contacts chats members invites messages send read logout auth watch download react unsend doctor completion version update help"},
+		{[]string{"line", ""}, "login whoami contacts chats squares square-chats square-messages members invites messages send read logout auth watch download react unsend doctor completion version update help"},
 		{[]string{"line", "--read-only", "se"}, "send"},
 		{[]string{"line", "--error-format", "j"}, "json"},
 		{[]string{"line", "--error-format", "json", "--read-only", "rea"}, "read react"},
@@ -213,7 +213,7 @@ func TestZshCompletionBehavior(t *testing.T) {
 		words []string
 		want  string
 	}{
-		{[]string{"line", ""}, "login whoami contacts chats members invites messages send read logout auth watch download react unsend doctor completion version update help"},
+		{[]string{"line", ""}, "login whoami contacts chats squares square-chats square-messages members invites messages send read logout auth watch download react unsend doctor completion version update help"},
 		{[]string{"line", "--"}, "--error-format --read-only --help --version"},
 		{[]string{"line", "--read-only", "send", "Alice", "--"}, "--timeout --json --show-ids --require-e2ee --mentions --text --stdin --file --image --reply-to --help"},
 		{[]string{"line", "send", "Alice", "--file", ""}, "FILES"},

@@ -26,6 +26,9 @@ Everyday commands:
   whoami      Show your signed-in account
   contacts    Find friends (--search NAME) or look up people (--mid MID)
   chats       Browse recent conversations
+  squares     List OpenChat communities you have joined
+  square-chats  List joined OpenChat rooms
+  square-messages  Read messages from an OpenChat room
   members     List group members and invitees
   invites     List, accept, or reject group invitations
   messages    Choose a chat and read messages
@@ -51,9 +54,12 @@ Examples:
   line send "Alice" --file report.pdf
   line send "Alice" --image screenshot.png
   line chats --unread
+  line squares --json
+  line square-chats --json
+  line square-messages CHAT_MID --json
   line --read-only messages CHAT_ID --json
 
-whoami, contacts, chats, members, invites, messages, send, download, read, react,
+whoami, contacts, chats, squares, square-chats, square-messages, members, invites, messages, send, download, read, react,
 unsend, and doctor accept --timeout.
 Reading messages never sends read receipts; only line read does.
 Use --error-format=json before a core command or auth status for JSON errors on stderr.
@@ -144,6 +150,12 @@ func (a *App) run(args []string) error {
 		return a.contactsCommand(args[1:])
 	case "chats":
 		return a.chatCommand(args[1:])
+	case "squares":
+		return a.squareListCommand("squares", args[1:])
+	case "square-chats":
+		return a.squareListCommand("square-chats", args[1:])
+	case "square-messages":
+		return a.squareMessagesCommand(args[1:])
 	case "messages", "send":
 		return a.messageCommand(command, args[1:])
 	case "help":

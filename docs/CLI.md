@@ -271,6 +271,48 @@ line --error-format=json messages "Chat name" --diagnostics --json --limit 50
 `--resolve-names`, `--page`, or `--cursor`. A missing ID only means it was absent
 from this response. See the [diagnostic fields](JSON.md#history-diagnostics).
 
+### Read joined OpenChats
+
+The Square commands read only communities and rooms already available to the
+signed-in session. They do not join or leave a Square, send messages, or mark
+messages as read.
+
+```sh
+line squares
+line squares --json --limit 50
+line square-chats --json
+line square-messages CHAT_MID --limit 50
+line square-messages CHAT_MID --json --cursor 'NEXT_CURSOR'
+```
+
+`squares` lists joined OpenChat communities; `square-chats` lists their joined
+rooms and includes the room MID needed by `square-messages`. Each command
+returns one page. `--limit` accepts 1–100 (default 100); pass the returned
+`next_cursor` unchanged with `--cursor` to continue. An absent cursor means the
+server did not provide another page. These commands require an existing LINE
+session and accept the standard `--timeout` option. They also work with
+`--read-only`.
+
+The release installer contains this feature only after a release includes it.
+To try the implementation branch before then, build the fork from source:
+
+```sh
+git clone https://github.com/sickhye/line-cli.git
+cd line-cli
+git checkout feat/openchat-readonly
+./build.sh
+./bin/line squares --json
+```
+
+Square transport uses Compact Thrift over the allowlisted `/SQ1` endpoint and
+the current session credential. The method names and field IDs are derived from
+the public `softnetics/line-rs` Thrift schema. The endpoint/header contract,
+message-event interpretation, cursor behavior, and server response schema have
+not been verified against the Chrome Extension or a live LINE service. Message
+output exposes text fields present in returned Square events; this command does
+not decrypt messages or claim complete historical coverage. Treat the returned
+fields as protocol-derived pending that verification.
+
 ### History pagination JSON
 
 ```sh
