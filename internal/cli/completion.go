@@ -47,6 +47,9 @@ func completionSpec() []completionCommand {
 		{name: "whoami", about: "Show your signed-in account", flags: []string{"timeout", "show-ids", "json"}},
 		{name: "contacts", about: "Find friends or look up people", flags: []string{"timeout", "search", "limit", "mid", "show-ids", "json"}},
 		{name: "chats", about: "Browse recent conversations", flags: []string{"timeout", "all", "search", "limit", "show-ids", "unread", "details", "json"}},
+		{name: "squares", about: "List joined OpenChat communities", flags: []string{"timeout", "limit", "cursor", "json"}},
+		{name: "square-chats", about: "List joined OpenChat rooms", flags: []string{"timeout", "limit", "cursor", "json"}},
+		{name: "square-messages", about: "Read messages from an OpenChat room", flags: []string{"timeout", "limit", "cursor", "show-ids", "json"}},
 		{name: "members", about: "List group members and invitees", flags: []string{"json", "timeout"}},
 		{name: "invites", about: "List, accept, or reject group invitations", flags: invite, subs: []completionCommand{
 			{name: "accept", about: "Accept a group invitation", flags: invite},
